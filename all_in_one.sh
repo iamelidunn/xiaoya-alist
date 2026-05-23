@@ -73,6 +73,48 @@ function DEBUG() {
     echo -e "${DEBUG} ${1}"
 }
 
+# ---------- CDN URLs (GitHub first) ----------
+XIAOYA_GITHUB_RAW="https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master"
+XIAOYA_JSdelivr="https://fastly.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest"
+XIAOYA_DDSREM="https://ddsrem.com/xiaoya"
+XIAOYA_GITEE_BASE="https://gitee.com/ddsrem/xiaoya-alist-base/raw/master"
+XIAOYA_NOTIFY_FETCH='{ curl -fsSLk https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master/xiaoya_notify.sh || curl -fsSLk https://fastly.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/xiaoya_notify.sh || curl -fsSLk https://ddsrem.com/xiaoya/xiaoya_notify.sh; }'
+
+function curl_xiaoya_to_file() {
+    local dest="$1"
+    local path="$2"
+    if curl -sSLf "${XIAOYA_GITHUB_RAW}/${path}" -o "${dest}"; then
+        return 0
+    fi
+    if curl -sSLf "${XIAOYA_JSdelivr}/${path}" -o "${dest}"; then
+        return 0
+    fi
+    if curl -sSLf "${XIAOYA_DDSREM}/${path}" -o "${dest}"; then
+        return 0
+    fi
+    return 1
+}
+
+function curl_xiaoya_script() {
+    local path="$1"
+    { curl -fsSLk "${XIAOYA_GITHUB_RAW}/${path}" || curl -fsSLk "${XIAOYA_JSdelivr}/${path}" || curl -fsSLk "${XIAOYA_DDSREM}/${path}"; }
+}
+
+function curl_xiaoya_base_module() {
+    local file="$1"
+    local dest="$2"
+    if curl -sSLf "${XIAOYA_GITHUB_RAW}/base/${file}.sh" -o "${dest}"; then
+        return 0
+    fi
+    if curl -sSLf "${XIAOYA_JSdelivr}/base/${file}.sh" -o "${dest}"; then
+        return 0
+    fi
+    if curl -sSLf "${XIAOYA_GITEE_BASE}/${file}.sh" -o "${dest}"; then
+        return 0
+    fi
+    return 1
+}
+
 function __unzip_metadata_debug() {
 
     DEBUG "${OSNAME} $(uname -a)"
@@ -3127,8 +3169,16 @@ function install_lovechen_embyserver() {
         rm -rf ${MEDIA_DIR}/config/data/library.db-shm
     fi
     chmod 777 ${MEDIA_DIR}/config/data/library.org.db
-    curl -o ${MEDIA_DIR}/config/data/library.db https://cdn.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/emby_lovechen/library.db
-    curl -o ${MEDIA_DIR}/temp.sql https://cdn.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/emby_lovechen/temp.sql
+    if ! curl -fsSL -o ${MEDIA_DIR}/config/data/library.db "${XIAOYA_GITHUB_RAW}/emby_lovechen/library.db"; then
+        if ! curl -fsSL -o ${MEDIA_DIR}/config/data/library.db "${XIAOYA_JSdelivr}/emby_lovechen/library.db"; then
+            curl -fsSL -o ${MEDIA_DIR}/config/data/library.db "https://cdn.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/emby_lovechen/library.db"
+        fi
+    fi
+    if ! curl -fsSL -o ${MEDIA_DIR}/temp.sql "${XIAOYA_GITHUB_RAW}/emby_lovechen/temp.sql"; then
+        if ! curl -fsSL -o ${MEDIA_DIR}/temp.sql "${XIAOYA_JSdelivr}/emby_lovechen/temp.sql"; then
+            curl -fsSL -o ${MEDIA_DIR}/temp.sql "https://cdn.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/emby_lovechen/temp.sql"
+        fi
+    fi
     pull_run_glue sqlite3 /media/config/data/library.db ".read /media/temp.sql"
 
     INFO "数据库转换成功！"
@@ -4859,7 +4909,7 @@ function main_xiaoya_all_emby() {
     4)
         clear
         get_config_dir
-        bash -c "$(curl -sLk https://ddsrem.com/xiaoya/emby_config_editor.sh)" -s ${CONFIG_DIR}
+        bash -c "$(curl_xiaoya_script emby_config_editor.sh)" -s ${CONFIG_DIR}
         main_xiaoya_all_emby
         ;;
     5)
@@ -4935,11 +4985,11 @@ function install_xiaoyahelper() {
 
     docker_pull "ddsderek/xiaoyakeeper:latest"
 
-    XIAOYAHELPER_URL="https://xiaoyahelper.ddsrem.com/aliyun_clear.sh"
+    XIAOYAHELPER_URL="https://xiaoyahelper.zengge99.eu.org/aliyun_clear.sh"
     if xiaoyahelper_install_check "${XIAOYAHELPER_URL}"; then
         return 0
     fi
-    XIAOYAHELPER_URL="https://xiaoyahelper.zengge99.eu.org/aliyun_clear.sh"
+    XIAOYAHELPER_URL="https://xiaoyahelper.ddsrem.com/aliyun_clear.sh"
     if xiaoyahelper_install_check "${XIAOYAHELPER_URL}"; then
         return 0
     fi
@@ -4964,11 +5014,11 @@ function once_xiaoyahelper() {
         TG_CHOOSE="-tg"
     fi
 
-    XIAOYAHELPER_URL="https://xiaoyahelper.ddsrem.com/aliyun_clear.sh"
+    XIAOYAHELPER_URL="https://xiaoyahelper.zengge99.eu.org/aliyun_clear.sh"
     if bash -c "$(curl --insecure -fsSL -k ${XIAOYAHELPER_URL} | tail -n +2)" -s 1 ${TG_CHOOSE}; then
         INFO "运行完成！"
     else
-        XIAOYAHELPER_URL="https://xiaoyahelper.zengge99.eu.org/aliyun_clear.sh"
+        XIAOYAHELPER_URL="https://xiaoyahelper.ddsrem.com/aliyun_clear.sh"
         if bash -c "$(curl --insecure -fsSL -k ${XIAOYAHELPER_URL} | tail -n +2)" -s 1 ${TG_CHOOSE}; then
             INFO "运行完成！"
         else
@@ -6509,21 +6559,12 @@ function first_init() {
     if [ -f /tmp/xiaoya_alist ]; then
         rm -rf /tmp/xiaoya_alist
     fi
-    if ! curl -sL https://ddsrem.com/xiaoya/xiaoya_alist -o /tmp/xiaoya_alist; then
-        if ! curl -sL https://fastly.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/xiaoya_alist -o /tmp/xiaoya_alist; then
-            curl -sL https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master/xiaoya_alist -o /tmp/xiaoya_alist
-            if ! grep -q 'alias xiaoya' /etc/profile; then
-                echo -e "alias xiaoya='bash -c \"\$(curl -sLk https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master/xiaoya_alist)\"'" >> /etc/profile
-            fi
-        else
-            if ! grep -q 'alias xiaoya' /etc/profile; then
-                echo -e "alias xiaoya='bash -c \"\$(curl -sLk https://fastly.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/xiaoya_alist)\"'" >> /etc/profile
-            fi
+    if curl_xiaoya_to_file /tmp/xiaoya_alist "xiaoya_alist"; then
+        if ! grep -q 'alias xiaoya' /etc/profile; then
+            echo -e "alias xiaoya='bash -c \"\$(curl -sLk ${XIAOYA_GITHUB_RAW}/xiaoya_alist)\"'" >> /etc/profile
         fi
     else
-        if ! grep -q 'alias xiaoya' /etc/profile; then
-            echo -e "alias xiaoya='bash -c \"\$(curl -sLk https://ddsrem.com/xiaoya_install.sh)\"'" >> /etc/profile
-        fi
+        WARN "xiaoya CLI 获取失败，跳过 alias 配置"
     fi
     # 兼容仓库迁移
     if grep -q 'DDS-Derek/xiaoya-alist' /etc/profile; then
@@ -6559,7 +6600,9 @@ root_need
 if [ "$(uname -s)" == "Darwin" ]; then
     if ! command -v brew; then
         WARN "brew 未安装，脚本尝试自动安装..."
-        if /bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"; then
+        if /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+            INFO "brew 安装成功！"
+        elif /bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"; then
             INFO "brew 安装成功！"
         else
             ERROR "brew 安装失败，请手动安装！"
@@ -6586,13 +6629,9 @@ if [ "$(uname -s)" == "Darwin" ]; then
         if [ -f /tmp/run_xiaoya_install_user.txt ]; then
             rm -rf /tmp/run_xiaoya_install_user.txt
         fi
-        if ! curl -sL https://ddsrem.com/xiaoya/all_in_one.sh -o /tmp/xiaoya_install.sh; then
-            if ! curl -sL https://fastly.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/all_in_one.sh -o /tmp/xiaoya_install.sh; then
-                if ! curl -sL https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master/all_in_one.sh -o /tmp/xiaoya_install.sh; then
-                    ERROR "脚本获取失败！"
-                    exit 1
-                fi
-            fi
+        if ! curl_xiaoya_to_file /tmp/xiaoya_install.sh "all_in_one.sh"; then
+            ERROR "脚本获取失败！"
+            exit 1
         fi
         INFO "脚本获取成功！"
         sed -i '' '/^root_need$/d' /tmp/xiaoya_install.sh
@@ -6609,12 +6648,10 @@ if [ ! -d "/tmp/xiaoya_alist_tmp" ]; then
     mkdir -p /tmp/xiaoya_alist_tmp
 fi
 for file in "base" "image_mirror" "auto_symlink" "jellyfin" "portainer" "onelist" "casaos" "deprecation"; do
-    if ! curl -sSLf "https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/refs/heads/master/base/${file}.sh" -o "/tmp/xiaoya_alist_tmp/${file}.sh"; then
-        if ! curl -sSLf "https://gitee.com/ddsrem/xiaoya-alist-base/raw/master/${file}.sh" -o "/tmp/xiaoya_alist_tmp/${file}.sh"; then
-            ERROR "${file} 基础库获取失败！"
-            ERROR "请检查是否能访问 github.com 或 gitee.com！"
-            exit 1
-        fi
+    if ! curl_xiaoya_base_module "${file}" "/tmp/xiaoya_alist_tmp/${file}.sh"; then
+        ERROR "${file} 基础库获取失败！"
+        ERROR "请检查是否能访问 github.com、jsdelivr.net 或 gitee.com！"
+        exit 1
     fi
     source "/tmp/xiaoya_alist_tmp/${file}.sh"
     rm -f "/tmp/xiaoya_alist_tmp/${file}.sh"

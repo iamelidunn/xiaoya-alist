@@ -17,6 +17,8 @@
 #
 # ——————————————————————————————————————————————————————————————————————————————————
 
+XIAOYA_NOTIFY_FETCH='{ curl -fsSLk https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master/xiaoya_notify.sh || curl -fsSLk https://fastly.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/xiaoya_notify.sh || curl -fsSLk https://ddsrem.com/xiaoya/xiaoya_notify.sh; }'
+
 function install_xiaoya_notify_cron() {
 
     if [ ! -f ${DDSREM_CONFIG_DIR}/resilio_config_dir.txt ]; then
@@ -101,7 +103,7 @@ function install_xiaoya_notify_cron() {
     fi
 
     # 组合定时任务命令
-    CRON="${minu} ${hour} */${sync_day} * *   bash -c \"\$(curl -k https://ddsrem.com/xiaoya/xiaoya_notify.sh)\" -s \
+    CRON="${minu} ${hour} */${sync_day} * *   bash -c \"\$(${XIAOYA_NOTIFY_FETCH})\" -s \
 --auto_update_all_115=${auto_update_all_115} \
 --auto_update_config=${auto_update_config} \
 --media_dir=$(cat ${DDSREM_CONFIG_DIR}/xiaoya_alist_media_dir.txt) \
@@ -429,7 +431,7 @@ function once_sync_emby_config() {
         if [ -z "$COMMAND_1" ]; then
             get_config_dir
             get_media_dir
-            COMMAND="bash -c \"\$(curl -k https://ddsrem.com/xiaoya/xiaoya_notify.sh | head -n -2 && echo detection_config_update)\" -s \
+            COMMAND="bash -c \"\$(${XIAOYA_NOTIFY_FETCH} | head -n -2 && echo detection_config_update)\" -s \
 --auto_update_all_115=no \
 --auto_update_config=yes \
 --force_update_config=yes \
@@ -439,7 +441,7 @@ function once_sync_emby_config() {
 --resilio_name=$(cat ${DDSREM_CONFIG_DIR}/container_name/xiaoya_resilio_name.txt) \
 --xiaoya_name=$(cat ${DDSREM_CONFIG_DIR}/container_name/xiaoya_alist_name.txt)"
         else
-            COMMAND="bash -c \"\$(curl -k https://ddsrem.com/xiaoya/xiaoya_notify.sh | head -n -2 && echo detection_config_update)\" -s ${COMMAND_1}"
+            COMMAND="bash -c \"\$(${XIAOYA_NOTIFY_FETCH} | head -n -2 && echo detection_config_update)\" -s ${COMMAND_1}"
         fi
     elif [ -f /etc/synoinfo.conf ]; then
         COMMAND_1=$(grep 'xiaoya_notify' /etc/crontab | sed 's/^.*-s//; s/>>.*$//' | sed 's/--auto_update_all_115=yes/--auto_update_all_115=no/g')
@@ -453,7 +455,7 @@ function once_sync_emby_config() {
         if [ -z "$COMMAND_1" ]; then
             get_config_dir
             get_media_dir
-            COMMAND="bash -c \"\$(curl -k https://ddsrem.com/xiaoya/xiaoya_notify.sh | head -n -2 && echo detection_config_update)\" -s \
+            COMMAND="bash -c \"\$(${XIAOYA_NOTIFY_FETCH} | head -n -2 && echo detection_config_update)\" -s \
 --auto_update_all_115=no \
 --auto_update_config=yes \
 --force_update_config=yes \
@@ -463,7 +465,7 @@ function once_sync_emby_config() {
 --resilio_name=$(cat ${DDSREM_CONFIG_DIR}/container_name/xiaoya_resilio_name.txt) \
 --xiaoya_name=$(cat ${DDSREM_CONFIG_DIR}/container_name/xiaoya_alist_name.txt)"
         else
-            COMMAND="bash -c \"\$(curl -k https://ddsrem.com/xiaoya/xiaoya_notify.sh | head -n -2 && echo detection_config_update)\" -s ${COMMAND_1}"
+            COMMAND="bash -c \"\$(${XIAOYA_NOTIFY_FETCH} | head -n -2 && echo detection_config_update)\" -s ${COMMAND_1}"
         fi
     else
         if docker container inspect xiaoya-cron > /dev/null 2>&1; then
@@ -474,7 +476,7 @@ function once_sync_emby_config() {
         else
             get_config_dir
             get_media_dir
-            COMMAND="bash -c \"\$(curl -k https://ddsrem.com/xiaoya/xiaoya_notify.sh | head -n -2 && echo detection_config_update)\" -s \
+            COMMAND="bash -c \"\$(${XIAOYA_NOTIFY_FETCH} | head -n -2 && echo detection_config_update)\" -s \
 --auto_update_all_115=no \
 --auto_update_config=yes \
 --force_update_config=yes \

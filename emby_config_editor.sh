@@ -355,9 +355,9 @@ fi
 if [ -f /tmp/xiaoya_alist ]; then
     rm -rf /tmp/xiaoya_alist
 fi
-if ! curl -sL https://ddsrem.com/xiaoya/xiaoya_alist -o /tmp/xiaoya_alist; then
-    if ! curl -sL https://cdn.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/xiaoya_alist -o /tmp/xiaoya_alist; then
-        curl -sL https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master/xiaoya_alist -o /tmp/xiaoya_alist
+if ! curl -sL "https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/master/xiaoya_alist" -o /tmp/xiaoya_alist; then
+    if ! curl -sL "https://fastly.jsdelivr.net/gh/xiaoyaDev/xiaoya-alist@latest/xiaoya_alist" -o /tmp/xiaoya_alist; then
+        curl -sL "https://ddsrem.com/xiaoya/xiaoya_alist" -o /tmp/xiaoya_alist
     fi
 fi
 
