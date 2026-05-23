@@ -2,6 +2,24 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2086
 # shellcheck source=/dev/null
+#
+# 小雅 AList 一体化安装管理脚本 (all_in_one.sh)
+#
+# 功能：通过交互式菜单，用 Docker 安装/更新/卸载小雅生态组件，包括：
+#   - 小雅 AList（网盘聚合）及 115/夸克/阿里/UC 等账号配置
+#   - 小雅 Emby 全家桶（元数据下载解压、Emby 容器、元数据爬虫）
+#   - 小雅助手、115 清理助手、Proxy、TV Token 刷新等周边工具
+#
+# 架构：
+#   1. 运行时从 gitee/github 拉取 base/*.sh 基础库（Docker 操作、镜像源等）
+#   2. first_init 检测 OS/CPU/Docker，初始化 ~/.ddsrem 配置目录
+#   3. main_return 主菜单 → 各 main_* 子菜单 → 具体 install/update/uninstall 函数
+#   4. 无参数启动进菜单；传函数名则直接调用，如: bash all_in_one.sh install_xiaoya_alist
+#
+# 主菜单 (main_return):
+#   1 小雅Alist  2 Emby全家桶  3 小雅助手  4 115清理  5 其他工具  6 高级配置
+#   隐藏: 66=Docker镜像源  fuckaliyun=阿里云TV Token快捷配置
+#
 PATH=${PATH}:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin:/opt/homebrew/bin
 export PATH
 #
@@ -24,12 +42,14 @@ export PATH
 DATE_VERSION="v1.8.4-2025_06_14_19_04"
 #
 # ——————————————————————————————————————————————————————————————————————————————————
+# 各 Emby 镜像默认版本号（安装/升级时引用）
 amilys_embyserver_latest_version=4.9.5.0
 emby_embyserver_latest_version=4.9.5.0
 amilys_embyserver_beta_version=4.10.0.11
 emby_embyserver_beta_version=4.10.0.11
 # ——————————————————————————————————————————————————————————————————————————————————
 
+# ---------- 终端彩色日志 ----------
 Sky_Blue="\033[36m"
 Blue="\033[34m"
 Green="\033[32m"
@@ -68,6 +88,7 @@ function __unzip_metadata_debug() {
 
 }
 
+# ---------- Docker Hub 镜像加速源候选列表（image_mirror 模块使用） ----------
 # shellcheck disable=SC2034
 mirrors=(
     "docker.io"
@@ -90,6 +111,7 @@ mirrors=(
     "docker.kejilion.pro"
 )
 
+# 115/夸克网盘分享链接列表（base64），用于元数据下载时的分享源
 pan115share_list_base64="NEtSZW11eCBzdzZwdzc5M3dmcCAyNjI4NDc4MjA5Nzg3MjY0MzE1IHc4MTYK55S15b2xMTA4MFAgc3c2OGZ1dTNubncgMTkyNjk2ODEwNTcyMjgyMzAzMSBwYjU3CueUteW9seaMiea8lOWRmOWvvOa8lOWIhuexuyBzd3owNHByM3poOSAyOTY2MzAyMDA0NDE5NDM4ODA2IHozODEK5ZCI6ZuGMSBzd3p5aXd3M3duOSAyNTI0ODExNTU3NTAwODUyMjc0IHcxZTAK5ZCI6ZuGMiBzd3p5aXdxM3duOSAyNjM3ODkwMjU4Mzc4OTIyNzc3IHg3MTYK5ZCI6ZuGMyBzd3p5aXdiM3duOSAyNjM3ODk2MzYwMjI3MjE1NzQ5IHFmZTgK5Yqo55S755S15b2xIHN3ejZnbWwzZndvIDI3ODM3NTM1OTgxNjc2NzgxNzYgODg4OArmrKfnvo7nlLXlvbEgc3c2OHd6OTNuY2IgMjY1NjIzMjA2MDQwMDM2NTc2OCA2NjY2CueUteinhuWJpy/nvo7liacgc3c2cGx0MjNuY2IgMjYyOTgzMDE4NTMyOTU1Mzc5NiA2NjY2CuWNg+mDqOaKlumfs+efreWJp+WQiOmbhiBzd3pxaDY3M2g0eSAyODQ0Mzg4NTQ1NDg3OTYxMjExIDUyOTYK5oqW6Z+z55+t5Ymn5ZCI6ZuGMS43N1Qgc3d6eDc2ZjN3ZmEgMjk1NTIyMDU3NjczNzAwOTk1OCBuNzI0CueUteinhuWJpy/mrKfnvo7liacgc3d6bm0zNzN3MXAgMjc3NTU2NzExNjY5NjI0NTQxMiBwZTM1Cumfs+S5kDIy5LiH6aaWIHN3em1xY3IzZnM2ICAyNzgzMzA0NDAzNTg1NTk2NTY2IHhkNjcK6Z+z5LmQMjLkuIfpppYvRERTK0hpUmVzIHN3NjU4dXEzNngyIDI1NjU2NzI0MDM3NjYwMDE0MzUgbWQ5OArpn7PkuZAyMuS4h+mmli/mr43luKbns7vliJcgc3c2NTh1cTM2eDIgMjU2NTQxNjQ3OTcwOTExNzg0MyBtZDk4Cumfs+S5kDIy5LiH6aaWL+e0ouWwvOeyvumAiSBzdzY1OHVxMzZ4MiAyNTY1OTE3Mzc5NTE1MDM5MTc2IG1kOTgK6Z+z5LmQMjLkuIfpppYv5ZCE57G76aOO5qC8IHN3NjU4dXEzNngyIDI1NjU0NjY1ODY5NTM0NjQ4NTcgbWQ5OArpn7PkuZAyMuS4h+mmli/ljY7or60yNzAwMOmmluaXoOaNnyBzdzY1OHViMzZ4MiAyNTY1Mjc0MDU1NzgzMzk4NzM0IHE3ZTAK6Z+z5LmQMjLkuIfpppYv5oyJ5q2M5omL5YiG57G7IHN3aGdldHMzemg5IDI5NjQ1OTI2MjY0OTQ1NDg1NTAgbjZlNgrnlLXop4bliacv5pel6Z+p5YmnIHN3emp4Y3Azd2ZhIDI5NTE4NzA2NjMxOTgzNTE2ODYgb2Y4OSAK55S16KeG5YmnL+WbveS6p+WJpyBzd3owb2ZsM3poOSAyOTU2ODE4MDgwOTY2MzIyMjAzIHE1ZjgK55S15b2xL+WOn+ebmCBzd3pldzRtM25jNiAyOTIwNjE5NTc4NzUwOTI1OTQ2IGkwZDcK55S15b2xL+mfqeWbveWOn+ebmCBzd2hpZDV4M3dmYSAzMDQyOTM2NTE2NzE0NTM3MTA1IHhkZjkK55S15b2xL+WPsOa5vuWOn+ebmCBzd2gzcmloM3dmYSAyOTgxNTAzMjEwMTQ0MjQ0NDg2IGc1MTIK55S15b2xL+mmmea4r+WOn+ebmCBzd2hiZnkzM3dmYSAzMDI1MTI0NTg1MTY5NTkyNTcyIGEzNzIK55S15b2xL1VIROWOn+ebmCBzd2hiczRyM3poOSAzMDIzMzMyMDQxNzgxNjE4NzYzIGVjMzgK5ryU5ZSx5LyaL+WOn+ebmCBzd3oxOHduM3poOSAyOTU5NzI0NzQ5NTI2MzQ1OTAwIHlmNjEK5ryU5ZSx5LyaL+WQiOmbhiBzd3oxODA3M3poOSAyOTU2ODk5ODkwOTA3Nzg2MTMwIHM1OTcK5ryU5ZSx5LyaL+iTneWFieWOn+ebmO+8iOW3suWIruWJiu+8iSBzd2h0bDBhM3dmYSAzMTExNDA3Nzg4OTQzMDU3MTIxIHpkNTIK55S16KeG5YmnL+aXpeWJpzEgc3d3M3lqMzN3ZmEgMzE0Mjg5NTgyMTY4OTAzNzY4MSB1YjQ2CueUteinhuWJpy/ml6XliacyIHN3dzZxNzYzd2ZhIDMxNDg2NTk2NDQ0Mjk2MDc1MDEgczIyNwrnlLXop4bliacv5pel5Ymn5bGLIHN3aDkyaTAzd2ZhIDMxMjkxNjA1ODE1OTAxMzExNzUgemRlOArnlLXlvbEvMjAyNSBzd3d6NG1nM3dmYSAzMTU5OTgxODkwMTM3ODU4ODI0IHcxMjgKCg=="
 quarkshare_list_base64="5Yqo5ryrL+WbveWGheWklue7j+WFuOWKqOeUu+WKqOa8q+Wkp+WFqCA2Yjc5NTIxODM0MmQgMjNkOTUxMjcxZDQ2NDY5N2JlMjMyZGJiNzQ2YjIyN2UK5Yqo5ryrL+W3suWujOe7k+Wbvea8qyA2Yjc5NTIxODM0MmQgZjZhYjZkYzAyMTBhNDJiZWEyZGMyYmZlYTM4YzJiZTQK5Yqo5ryrL+W3suWujOe7k+aXpea8qyA2Yjc5NTIxODM0MmQgZDI2NTk1NmUyNDFlNDlkYmJiN2JmNWU3MTYzMGIxOTMK5Yqo5ryrL+W3suWujOe7k+e+jua8qyA2Yjc5NTIxODM0MmQgYzRkNDI5ZGZjNjQ0NDczNzg2YmRiMjJhYTY3NDIxOTAK5bCP5ZOB55u45aOwLzIwMjTlvrfkupHnpL4gZWNlNTJkNjNiNjk4IGRhZTJmMzZkMzZkMDQ3M2I4OWZmODRkYWE4MWI4MzAzCuWwj+WTgeebuOWjsC/lsI/lk4HlpKflkIjpm4YgZTgyNzI2NGVhNDUzIDYwOWM1ZWI4YjMyNDRkYzI5NThiYzEzZjE2ZDQ1NGVkCuWwj+WTgeebuOWjsC/lsI/lk4Hnuq/kuqvlkIjpm4YgZDhiNGE1ODRmZDFhIGE1Mjk5MzQ5ZDM2OTQyMDY4YWRjODhiOTUyYzdjNDYxCueUteW9sS/lkIjpm4Yv5LulQUJDROW8gOWktOWQiOmbhiBhNjMyOTY3NzYwY2YgN2RhNGZkMmRjMDhmNGZhNTg1MmY5OTcyMTU1OTI1MTcK55S15b2xL+WQiOmbhi/ku6VFRkdI5byA5aS05ZCI6ZuGIDJmNTliYjVkOTZiOSA3YjcxNzM3ZTNjZDg0M2M1YTkzN2FjOTdhNTM1NDJkZArnlLXlvbEv5ZCI6ZuGL+S7pUlKS0zlvIDlpLTlkIjpm4YgNTA4MjhjMzY4ZGVmIDA5Njk1MGUzZDEwMjQyYjE5NjZiNzc3ODExMTVhMDdhCueUteW9sS/lkIjpm4Yv5LulTU5PUOW8gOWktOWQiOmbhiBlMDdlMjZhZWNjMDggYTJiMzA1MzE2MzFjNDZkY2IzOWYzMjA2OTc4OTgyOTUK55S15b2xL+WQiOmbhi/ku6VRUlNU5byA5aS05ZCI6ZuGIDA1MzZhMzhhMzU2ZSAxZDE3NWRiMzBlYWE0NTRlOWRiYzVlYWEwOWUxZTQ1NArnlLXlvbEv5ZCI6ZuGL+S7pVVWV1jlvIDlpLTlkIjpm4YgZTI3M2VmNjk3NDAzIDZkYmRhNmU4MTdlYjQxNDViYTJkZDY4MWU1N2FhNjc1CueUteW9sS/lkIjpm4Yv5LulWVrlvIDlpLTlkIjpm4YgYzhhYzZjODhlNWQ4IDQ4YzQ3OWUyNGJhZTRlYzNhNGE5ZDU2ZmNiMDZmY2Y0CueUteW9sS/lkIjpm4Yv5Lul5pWw5a2X5byA5aS05ZCI6ZuGIDQ5YWI3NWQ1MmUwMCBjZWMwNzAyZGIyNmI0N2M1YWJkNDJjYTc5YWJiNjVlMQrnlLXlvbEv5a+85ryUL+WMl+mHjuatpiBmYWIxZWRiOWU1ZWIgZDdiYmZmYzQ1ZWY2NDEwODhmZTRiMjAyOTEwOGJjYWMK55S15b2xL+WvvOa8lC/mtKrph5Hlrp0gYmUyNjFjOGE3ZWI4IGUxZGI5ZDc4NDgyMjQyYzI5NzNkMWNjMjMwNjBjYzFlCueUteW9sS/mvJTlkZgv5YiY5b635Y2OIDE3NjRjMmM4MTYwMyBhYmFlMmY3ZTYxZjU0OTgwODUxNjdlMDdlZjhkZWMzNArnlLXlvbEv5ryU5ZGYL+WRqOaYn+mpsCA2MGRjYTU4MDA5YWYgN2RhNTAyZDI0ZjQ3NGI2MGFmY2MzNDJmZDVhYzBkZTMK55S15b2xL+a8lOWRmC/lkajmtqblj5EgZTU4M2ZhYzQ1NTkyIDgyYzA0OWMxNDA1MDRkNGFhMzFjYmZlMTY0NWNiOWQ4CueUteW9sS/mvJTlkZgv5byg5Zu96I2jIGQzMDAwZjE0OTQyZSA4YzM1ZmNiYjRlODU0ZTUwYjM4NWRmNzAyNjA0ZDM4MgrnlLXlvbEv5ryU5ZGYL+aIkOm+mSBlNWI2NGRmYjFjODMgNjA3Yjg3OWRhMjVjNDQ2NDgzYmM3Zjg5NTBjZDczM2YK55S15b2xL+a8lOWRmC/mnY7kuL3nj40gNDczMzcwZTY1N2MwIGMzOWE1NjYwMDkyZTRiYmFhYzdjYWQzY2YwNjRlMjNjCueUteW9sS/mvJTlkZgv5p2O6L+e5p2wIGJmYzBhNjE1MGFmYyA2ZWViMDM2YzdkN2E0NTgwYWI5NWMxNjViYmVlNzRjMwrnlLXlvbEv5ryU5ZGYL+iIkua3hyA4NGU1M2RkMzc4ZjIgYzU5Yzc4MzU4NGU3NGQ3MDk0Yjk4YTY0OTg0OTI4NzYK55S15b2xL+a8lOWRmC/pgrHmt5HotJ4gYzRiMDQwM2MwZGZhIGE5MjBlMDY1NTVmYjRkNTA5NzU3MGNhMWI0MTBiZDAyCueUteW9sS/nsr7pgInpq5jnlLvotKjpq5jliIbnlLXlvbEgOGYxYjRiN2RjNjllIGQyZTVlOTE2NzRmOTQzNTJiMzMxMGFiODZiOGMyMzhlCueUteW9sS/pn6nlm71S57qnIDU0MzJiZWFlNGYxYSA1MTI0ZjQ3ODlkYWY0NTAwOWJkMTMzYWY1MDk5ODEwMgrnlLXop4bliacvVFZC44CBQVRW5Lqa6KeGIDA4NTIxMmRmMzg1ZCAxNzJiN2VjY2MzODQ0YWU0YTExNDUxZDZhMTQ1ZmZlMArnlLXop4bliacv5bey5a6M57uTL+aVsOWtl+W8gOWktCBjZDRjNWFjN2U4MzAgZGZhMDFjYjE4OTU4NDA4Y2EwZGE3MmIxMzkzMTlhZjMK55S16KeG5YmnL+W3suWujOe7ky/osYbnk6Por4TliIY5LjDku6XkuIrlm73kuqfliacgZDE5YzRlYmUxZmY3IDdiNDI5NDNkNGYyMDQyYWJiOTA3Yzk5ZGRiYjM1NDBkCueUteinhuWJpy/lt7Llroznu5Mv6aaW5a2X5q+NQUJDRCBlMWIyYmE4YjZkNmMgYzg5MjQ2N2IwY2MyNGFhYmFjYmVjNzFhMGI2ZjRkM2MK55S16KeG5YmnL+W3suWujOe7ky/pppblrZfmr41FRkdIIDE2NmZhMGE3Y2E2ZiBmZjU3MDgzZDg5MjM0ZWQzODkzMmRjMDYwOTdkMTE1ZArnlLXop4bliacv5bey5a6M57uTL+mmluWtl+avjUlKS0wgMzdhOTJjMGI3ZjEwIDU4NTkwN2FiYTBlZjQ2NGJhMDBhMGYyMGI0N2ZhMTE2CueUteinhuWJpy/lt7Llroznu5Mv6aaW5a2X5q+NTk1PUCBmYjMzODZlNDJhZjIgMzZlMmY4MWZmNDE0NGE5YzhjMTQ5ODhlZDg5YTg2MGQK55S16KeG5YmnL+W3suWujOe7ky/pppblrZfmr41RUlNUIDQ2Y2UyMTRmNGVkNyAzYjRmOWUwYzY3NTk0OWM5OTI2OTQ3NmU1ZjljMDdhOArnlLXop4bliacv5bey5a6M57uTL+mmluWtl+avjVVWV1ggZmU0NjgxZDdmYjQzIGJjYmNmZDM4ZDI1NDRmNWY5NTFlY2ZlNDMwNDgzMjAzCueUteinhuWJpy/lt7Llroznu5Mv6aaW5a2X5q+NWVogOGQ2NWU4ODViMDU5IDAzNmZkOTg5NWM0YjRhNDdhNTliMTcwNDY3MTU4MTZmCumfs+S5kC/kuabpppnpn7PkuZDkuJbnuqrlhbjol48gZDJkZmEzMjY0N2Y2IDE2N2FlOWVkZDNmZTQ2NjJhMmNlMzc3NTU5ZTM1ZjU4Cumfs+S5kC/lj6Tlhbjpn7PkuZDnsr7pgInlkIjpm4YgMmI0OTc4MjEzYjI5IDY5MDM4ZmYwOTAwNTRhMWViODgwMzEyYmU0Nzc1MzkyCumfs+S5kC/lpKfoh6rnhLbpn7PkuZDns7vliJflkIjpm4YgNjUxZTVmYTkzMDU3IDljOWYzMzM2NzgzZTQ4YWY5ZjQ3YzVlY2Q5OThlOTE0Cumfs+S5kC/nuq/pn7PkuZDlkIjpm4YgMTI4NDgzODFkY2UxIGFlMmNhZWI3ODQ2ZDRmODU4NDY3ZDJiNjI2ZDc4Y2EzCumfs+S5kC/ovabovb3ml6DmjZ/njq/nu5Xpn7PmlYjpn7PkuZDlkIjpm4YgODA1ZDc2YTA4MDYzIDU5M2Y5ODEwNGYxOTQzMDJhMjdhZTkxYmE3Y2QxOGRiCumfs+S5kC/pnIfmkrzlv4PngbXnmoTlj7Lor5fpn7PkuZDlkIjpm4YgZDFhMGI3MDQ2YjIwIDI5NGE1M2EzYzllODRlZjBhMGFjYzA0MTk1YzAyNWQ4Cgo="
 
@@ -98,8 +120,11 @@ GLOBAL_UA_2="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML
 QUARK_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch"
 UC_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) uc-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch"
 
+# Emby 元数据包文件名（伪装成 mp4 的压缩包）
 ALL_METADATA_FILES=("all.mp4" "config.mp4" "115.mp4")
 
+# ---------- 路径与网络工具 ----------
+# 读取 default_network.txt，返回 host 或 bridge 对应的 docker run 网络参数
 function get_default_network() {
 
     _default_network=$(cat "${DDSREM_CONFIG_DIR}/default_network.txt")
@@ -122,6 +147,7 @@ function get_default_network() {
 
 }
 
+# 按 NAS/OS 类型推断配置目录与媒体目录默认路径
 function get_path() {
 
     case "${OSNAME}" in
@@ -172,6 +198,7 @@ function get_path() {
 
 }
 
+# ---------- 容器启动等待（轮询 docker logs 直到就绪或超时） ----------
 function wait_emby_start() {
 
     local CONTAINER_NAME TARGET_LOG_LINE_SUCCESS start_time
@@ -217,6 +244,7 @@ function wait_xiaoya_start() {
 
 }
 
+# ---------- 网盘账号凭证有效性检测 ----------
 function check_quark_cookie() {
 
     if [[ ! -f "${1}/quark_cookie.txt" ]] && [[ ! -s "${1}/quark_cookie.txt" ]]; then
@@ -438,6 +466,7 @@ function check_aliyunpan_opentoken() {
 
 }
 
+# ---------- 账号配置向导（二维码扫描 / 手动粘贴 Cookie 或 Token） ----------
 function qrcode_mode_choose() {
 
     extra_parameters=
@@ -994,6 +1023,7 @@ function settings_aliyunpan_folder_id() {
 
 }
 
+# ---------- 交互式选择小雅配置目录与 Emby 媒体目录 ----------
 function get_config_dir() {
 
     local xiaoya_config_dir DEFAULT_CONFIG_DIR
@@ -1102,6 +1132,7 @@ function get_media_dir() {
 
 }
 
+# ---------- 账号管理子菜单（115/夸克/阿里/UC/ali2115） ----------
 function main_account_management() {
 
     function main_account_management_level_two() {
@@ -1221,6 +1252,7 @@ function main_account_management() {
 
 }
 
+# ---------- 小雅 AList 容器：安装 / 更新 / 卸载 ----------
 function install_xiaoya_alist() {
 
     if [ ! -d "${CONFIG_DIR}" ]; then
@@ -1763,6 +1795,7 @@ function main_xiaoya_restart_cron() {
 
 }
 
+# 小雅 AList 子菜单：安装、更新、卸载、账号管理、定时重启等
 function main_xiaoya_alist() {
 
     echo -e "——————————————————————————————————————————————————————————————————————————————————"
@@ -1823,6 +1856,7 @@ function main_xiaoya_alist() {
 
 }
 
+# ---------- Docker 网络、磁盘、临时容器工具 ----------
 function get_docker0_url() {
 
     if command -v ifconfig > /dev/null 2>&1; then
@@ -2180,6 +2214,7 @@ function check_metadata_size() {
 
 }
 
+# ---------- Emby 元数据：下载、解压、容量检测 ----------
 function __unzip_metadata() {
 
     function metadata_unziper() {
@@ -2743,6 +2778,7 @@ function download_unzip_xiaoya_emby_new_config() {
 
 }
 
+# 元数据下载/解压交互菜单（支持按分类选择解压）
 function main_download_unzip_xiaoya_emby() {
 
     __data_downloader=$(cat ${DDSREM_CONFIG_DIR}/data_downloader.txt)
@@ -2937,6 +2973,7 @@ function main_download_unzip_xiaoya_emby() {
 
 }
 
+# ---------- Emby 容器安装（官方 / amilys / iceyheart / lovechen 等镜像） ----------
 function install_emby_embyserver() {
 
     INFO "开始安装Emby容器....."
@@ -3619,6 +3656,7 @@ function install_emby_xiaoya_all_emby() {
 
 }
 
+# Emby 容器一键升级（切换镜像与版本）
 function oneclick_upgrade_emby() {
 
     local emby_name emby_config_dir emby_ip
@@ -4095,6 +4133,7 @@ function xiaoya_emd_pathlib() {
 
 }
 
+# ---------- 小雅元数据定时爬虫 (xiaoya-emd) ----------
 function install_xiaoya_emd() {
 
     if docker container inspect xiaoya-emd-go > /dev/null 2>&1; then
@@ -4733,6 +4772,7 @@ function main_xiaoya_all_emby_other_features() {
 
 }
 
+# ---------- Emby 全家桶主菜单 ----------
 function main_xiaoya_all_emby() {
 
     local show_main_xiaoya_all_emby
@@ -4856,6 +4896,7 @@ function main_xiaoya_all_emby() {
 
 }
 
+# ---------- 小雅助手 (xiaoyahelper / xiaoyakeeper) ----------
 function xiaoyahelper_install_check() {
     local URL="$1"
     if bash -c "$(curl --insecure -fsSL -k ${URL} | tail -n +2)" -s "${MODE}" ${TG_CHOOSE}; then
@@ -5015,6 +5056,7 @@ function main_xiaoyahelper() {
 
 }
 
+# ---------- 小雅 AList-TVBox（非原版） ----------
 function install_xiaoya_alist_tvbox() {
 
     local DEFAULT_CONFIG_DIR
@@ -5236,6 +5278,7 @@ function main_xiaoya_alist_tvbox() {
 
 }
 
+# ---------- 115 网盘清理助手 ----------
 function install_xiaoya_115_cleaner() {
 
     extra_parameters=
@@ -5428,6 +5471,7 @@ function main_xiaoya_115_cleaner() {
 
 }
 
+# ---------- 小雅 Proxy / 阿里云 TV Token 刷新 / LrcAPI ----------
 function install_xiaoya_proxy() {
 
     local config_dir
@@ -5841,6 +5885,7 @@ function main_lrcapi() {
 
 }
 
+# ---------- 容器名称自定义与脚本高级配置 ----------
 function init_container_name() {
 
     if [ ! -d ${DDSREM_CONFIG_DIR}/container_name ]; then
@@ -6020,6 +6065,7 @@ function reset_script_configuration() {
 
 }
 
+# ---------- 高级配置子菜单（容器名、镜像源、网络模式、7z 解压等） ----------
 function main_advanced_configuration() {
 
     __container_run_extra_parameters=$(cat "${DDSREM_CONFIG_DIR}/container_run_extra_parameters.txt")
@@ -6156,6 +6202,7 @@ function main_advanced_configuration() {
 
 }
 
+# ---------- 其他工具子菜单（Portainer、Auto_Symlink、Onelist 等，逻辑在 base/*.sh） ----------
 function main_other_tools() {
 
     echo -e "——————————————————————————————————————————————————————————————————————————————————"
@@ -6228,6 +6275,7 @@ function main_other_tools() {
 
 }
 
+# ---------- 主菜单入口（显示各组件运行状态，分发到子菜单） ----------
 function main_return() {
 
     local out_tips config_dir
@@ -6345,6 +6393,7 @@ function main_return() {
     esac
 }
 
+# 首次/每次启动初始化：检测 OS、CPU、Docker、创建 DDSREM 配置目录、注册 xiaoya alias
 function first_init() {
 
     INFO "获取系统信息中..."
@@ -6485,6 +6534,7 @@ function first_init() {
 
 }
 
+# Linux 需 root；macOS 禁止 root（见下方 macOS 提权逻辑）
 function root_need() {
     if [[ $EUID -ne 0 ]] && [ "$(uname -s)" != "Darwin" ]; then
         ERROR '此脚本必须以 root 身份运行！'
@@ -6496,6 +6546,13 @@ function root_need() {
     fi
 }
 
+# =============================================================================
+# 脚本入口
+#   1. root_need 权限检查
+#   2. macOS: 非 root 时重新下载脚本并以 sudo 运行，记录真实用户名供 PUID/PGID
+#   3. 下载并 source base/*.sh 基础库（Docker 封装、镜像源、Portainer 等）
+#   4. first_init → 无参数进 main_return 菜单，有参数则直接调用对应函数
+# =============================================================================
 clear
 INFO "初始化中，请稍等...."
 root_need
@@ -6547,14 +6604,15 @@ if [ "$(uname -s)" == "Darwin" ]; then
         exit 0
     fi
 fi
+# 拉取 base 模块：base.sh 含 container_update、judgment_container 等核心 Docker 封装
 if [ ! -d "/tmp/xiaoya_alist_tmp" ]; then
     mkdir -p /tmp/xiaoya_alist_tmp
 fi
 for file in "base" "image_mirror" "auto_symlink" "jellyfin" "portainer" "onelist" "casaos" "deprecation"; do
-    if ! curl -sSLf "https://gitee.com/ddsrem/xiaoya-alist-base/raw/master/${file}.sh" -o "/tmp/xiaoya_alist_tmp/${file}.sh"; then
-        if ! curl -sSLf "https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/refs/heads/master/base/${file}.sh" -o "/tmp/xiaoya_alist_tmp/${file}.sh"; then
+    if ! curl -sSLf "https://raw.githubusercontent.com/xiaoyaDev/xiaoya-alist/refs/heads/master/base/${file}.sh" -o "/tmp/xiaoya_alist_tmp/${file}.sh"; then
+        if ! curl -sSLf "https://gitee.com/ddsrem/xiaoya-alist-base/raw/master/${file}.sh" -o "/tmp/xiaoya_alist_tmp/${file}.sh"; then
             ERROR "${file} 基础库获取失败！"
-            ERROR "请检查是否能访问 gitee.com 或 github.com！"
+            ERROR "请检查是否能访问 github.com 或 gitee.com！"
             exit 1
         fi
     fi
@@ -6566,7 +6624,7 @@ rm -rf /tmp/xiaoya_alist_tmp
 first_init
 clear
 if [ ! "$*" ]; then
-    main_return
+    main_return    # 交互式菜单模式
 else
-    "$@"
+    "$@"           # 非交互：直接调用函数，如 bash all_in_one.sh update_xiaoya_alist
 fi
