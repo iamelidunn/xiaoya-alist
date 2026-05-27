@@ -164,6 +164,8 @@ UC_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 
 # Emby 元数据包文件名（伪装成 mp4 的压缩包）
 ALL_METADATA_FILES=("all.mp4" "config.mp4" "115.mp4")
+METADATA_DOWNLOAD_MAX_RETRIES=100
+METADATA_DL_CONTAINER=""
 
 # ---------- 路径与网络工具 ----------
 # 读取 default_network.txt，返回 host 或 bridge 对应的 docker run 网络参数
@@ -2045,6 +2047,68 @@ function pull_run_glue() {
 
 }
 
+function pull_run_glue_download_cancellable() {
+
+    local rc logs_pid
+
+    if docker inspect xiaoyaliu/glue:latest > /dev/null 2>&1; then
+        local_sha=$(docker inspect --format='{{index .RepoDigests 0}}' xiaoyaliu/glue:latest 2> /dev/null | cut -f2 -d:)
+        remote_sha=$(curl -s -m 10 "https://hub.docker.com/v2/repositories/xiaoyaliu/glue/tags/latest" | grep -o '"digest":"[^"]*' | grep -o '[^"]*$' | tail -n1 | cut -f2 -d:)
+        if [ "$local_sha" != "$remote_sha" ]; then
+            docker rmi xiaoyaliu/glue:latest
+            docker_pull "xiaoyaliu/glue:latest"
+        fi
+    else
+        docker_pull "xiaoyaliu/glue:latest"
+    fi
+
+    METADATA_DL_CONTAINER="xiaoya_metadata_dl_${$}_${RANDOM}"
+
+    if [ -n "${extra_parameters}" ]; then
+        # shellcheck disable=SC2046
+        docker run -d \
+            --security-opt seccomp=unconfined \
+            --rm \
+            --name="${METADATA_DL_CONTAINER}" \
+            --net=host \
+            -v "${MEDIA_DIR}:/media" \
+            -v "${CONFIG_DIR}:/etc/xiaoya" \
+            ${extra_parameters} \
+            $(auto_privileged) \
+            -e LANG=C.UTF-8 \
+            -e TZ=Asia/Shanghai \
+            xiaoyaliu/glue:latest \
+            "${@}" > /dev/null
+    else
+        # shellcheck disable=SC2046
+        docker run -d \
+            --security-opt seccomp=unconfined \
+            --rm \
+            --name="${METADATA_DL_CONTAINER}" \
+            --net=host \
+            -v "${MEDIA_DIR}:/media" \
+            -v "${CONFIG_DIR}:/etc/xiaoya" \
+            $(auto_privileged) \
+            -e LANG=C.UTF-8 \
+            -e TZ=Asia/Shanghai \
+            xiaoyaliu/glue:latest \
+            "${@}" > /dev/null
+    fi
+
+    docker logs -f "${METADATA_DL_CONTAINER}" &
+    logs_pid=$!
+
+    docker wait "${METADATA_DL_CONTAINER}"
+    rc=$?
+
+    kill "${logs_pid}" 2> /dev/null
+    wait "${logs_pid}" 2> /dev/null
+    METADATA_DL_CONTAINER=""
+
+    return "${rc}"
+
+}
+
 function pull_run_glue_xh() {
 
     BUILDER_NAME="xiaoya_builder_$(date +%S%N | cut -c 7-11)"
@@ -2336,68 +2400,166 @@ function __unzip_metadata() {
 
 }
 
+function metadata_download_log_path() {
+
+    local file="$1"
+    local safe_name
+
+    safe_name=$(echo "${file}" | tr '.' '_')
+    echo "${DDSREM_CONFIG_DIR}/logs/metadata_download_${safe_name}_$(date +%Y-%m-%d_%H-%M-%S).log"
+
+}
+
+function metadata_download_log() {
+
+    local log_file="$1"
+    shift
+
+    echo "$(date +"%Y-%m-%d %T") $*" >> "${log_file}"
+
+}
+
+function metadata_download_is_cancelled() {
+
+    local rc="$1"
+
+    [ "${rc}" -eq 130 ] || [ "${rc}" -eq 143 ] || [ "${rc}" -eq 137 ]
+
+}
+
+function metadata_download_attempt() {
+
+    local file="$1"
+    local log_file="$2"
+    local __data_downloader download_threads rc
+
+    __data_downloader=$(cat "${DDSREM_CONFIG_DIR}/data_downloader.txt")
+    extra_parameters="--workdir=/media/temp"
+
+    metadata_download_log "${log_file}" "Using downloader: ${__data_downloader}"
+    INFO "使用下载器：${__data_downloader}"
+
+    if [ "${__data_downloader}" == "wget" ]; then
+        pull_run_glue_download_cancellable wget -c --show-progress "${xiaoya_addr}/d/元数据/${file}$(get_sign "${CONFIG_DIR}")" -U "${GLOBAL_UA}" -O "${file}"
+        rc=$?
+        if [ "${rc}" -eq 0 ]; then
+            return 0
+        fi
+        if metadata_download_is_cancelled "${rc}"; then
+            metadata_download_log "${log_file}" "Download cancelled (exit ${rc})"
+            return "${rc}"
+        fi
+        metadata_download_log "${log_file}" "wget download failed (exit ${rc})"
+        DEBUG "${OSNAME} $(uname -a)" >> "${log_file}" 2>&1
+        return 1
+    fi
+
+    pull_run_glue_xh xh --headers --follow --timeout=10 -o /media/headers.log "${xiaoya_addr}/d/元数据/${file}$(get_sign "${CONFIG_DIR}")" "User-Agent: ${GLOBAL_UA}" >> "${log_file}" 2>&1
+    if [ -f "${MEDIA_DIR}/headers.log" ]; then
+        if grep "X-115-Request-Id" "${MEDIA_DIR}/headers.log" && [ -f "${CONFIG_DIR}/ali2115.txt" ]; then
+            download_threads="2"
+        elif grep "X-Oss-Request-Id" "${MEDIA_DIR}/headers.log" && grep "X-Oss-Storage-Class" "${MEDIA_DIR}/headers.log"; then
+            download_threads="6"
+        else
+            download_threads="4"
+        fi
+        rm -f "${MEDIA_DIR}/headers.log"
+    elif [ -f "${CONFIG_DIR}/ali2115.txt" ]; then
+        download_threads="2"
+    else
+        download_threads="6"
+    fi
+
+    metadata_download_log "${log_file}" "aria2 threads: ${download_threads}"
+    if [ "${download_threads}" == "1" ]; then
+        INFO "单线程下载"
+    else
+        INFO "多线程下载，线程数：${download_threads}"
+    fi
+
+    pull_run_glue_download_cancellable aria2c -o "${file}" --header="User-Agent: ${GLOBAL_UA}" --allow-overwrite=true --auto-file-renaming=false --enable-color=false --file-allocation=none -c "-x${download_threads}" "${xiaoya_addr}/d/元数据/${file}$(get_sign "${CONFIG_DIR}")"
+    rc=$?
+    if [ "${rc}" -eq 0 ]; then
+        if [ -f "${MEDIA_DIR}/temp/${file}.aria2" ]; then
+            metadata_download_log "${log_file}" "Incomplete download: ${MEDIA_DIR}/temp/${file}.aria2 exists"
+            return 1
+        fi
+        return 0
+    fi
+    if metadata_download_is_cancelled "${rc}"; then
+        metadata_download_log "${log_file}" "Download cancelled (exit ${rc})"
+        return "${rc}"
+    fi
+
+    metadata_download_log "${log_file}" "aria2 download failed (exit ${rc})"
+    DEBUG "${OSNAME} $(uname -a)" >> "${log_file}" 2>&1
+    return 1
+
+}
+
 function __download_metadata() {
 
     function metadata_downloader() {
 
-        local __data_downloader
+        local file="$1"
+        local log_file attempt=1 rc
 
-        INFO "开始下载 ${1} ..."
-        INFO "下载路径：${MEDIA_DIR}/temp/${1}"
+        function metadata_download_cancel() {
 
-        __data_downloader=$(cat "${DDSREM_CONFIG_DIR}/data_downloader.txt")
+            echo
+            if [ -n "${METADATA_DL_CONTAINER}" ]; then
+                docker kill "${METADATA_DL_CONTAINER}" > /dev/null 2>&1
+                METADATA_DL_CONTAINER=""
+            fi
+            metadata_download_log "${log_file}" "Download cancelled by user"
+            rm -f "${MEDIA_DIR}/temp/${file}" "${MEDIA_DIR}/temp/${file}.aria2"
+            trap - INT TERM
+            WARN "${file} 下载已取消"
+            exit 130
 
-        INFO "使用下载器：${__data_downloader}"
+        }
 
-        extra_parameters="--workdir=/media/temp"
+        mkdir -p "${DDSREM_CONFIG_DIR}/logs"
+        log_file="$(metadata_download_log_path "${file}")"
+        trap metadata_download_cancel INT TERM
 
-        if [ "${__data_downloader}" == "wget" ]; then
-            # wget 下载模式下只能单线程下载
-            if ! pull_run_glue wget -c --show-progress "${xiaoya_addr}/d/元数据/${1}$(get_sign "${CONFIG_DIR}")" -U "${GLOBAL_UA}" -O "${1}"; then
-                DEBUG "${OSNAME} $(uname -a)"
-                ERROR "${1} 下载失败！"
+        INFO "开始下载 ${file} ..."
+        INFO "下载路径：${MEDIA_DIR}/temp/${file}"
+        INFO "下载日志：${log_file}"
+
+        metadata_download_log "${log_file}" "Download started: ${file}"
+        metadata_download_log "${log_file}" "Download path: ${MEDIA_DIR}/temp/${file}"
+        metadata_download_log "${log_file}" "Xiaoya URL: ${xiaoya_addr}/d/元数据/${file}"
+
+        while [ "${attempt}" -le "${METADATA_DOWNLOAD_MAX_RETRIES}" ]; do
+            INFO "第 ${attempt}/${METADATA_DOWNLOAD_MAX_RETRIES} 次下载 ${file} ..."
+            metadata_download_log "${log_file}" "Attempt ${attempt}/${METADATA_DOWNLOAD_MAX_RETRIES} started"
+            metadata_download_attempt "${file}" "${log_file}"
+            rc=$?
+            if [ "${rc}" -eq 0 ]; then
+                metadata_download_log "${log_file}" "Attempt ${attempt} succeeded"
+                INFO "${file} 下载成功！"
+                INFO "日志：${log_file}"
+                trap - INT TERM
+                return 0
+            fi
+            if metadata_download_is_cancelled "${rc}"; then
+                metadata_download_cancel
+            fi
+            if [ "${attempt}" -ge "${METADATA_DOWNLOAD_MAX_RETRIES}" ]; then
+                metadata_download_log "${log_file}" "Download failed after ${METADATA_DOWNLOAD_MAX_RETRIES} attempts"
+                trap - INT TERM
+                ERROR "${file} 下载失败，已达最大重试次数 ${METADATA_DOWNLOAD_MAX_RETRIES}（日志：${log_file}）"
                 exit 1
             fi
-        else
-            local download_threads
-            pull_run_glue_xh xh --headers --follow --timeout=10 -o /media/headers.log "${xiaoya_addr}/d/元数据/${1}$(get_sign "${CONFIG_DIR}")" "User-Agent: ${GLOBAL_UA}"
-            if [ -f "${MEDIA_DIR}/headers.log" ]; then
-                # 115网盘下载链接：返回为 X-115-Request-Id，并且存在 ali2115.txt 文件
-                if grep "X-115-Request-Id" "${MEDIA_DIR}/headers.log" && [ -f "${CONFIG_DIR}/ali2115.txt" ]; then
-                    download_threads="2"
-                # 阿里云盘下载链接：非 115 链接情况下，返回为 X-Oss-Request-Id + X-Oss-Storage-Class
-                elif grep "X-Oss-Request-Id" "${MEDIA_DIR}/headers.log" && grep "X-Oss-Storage-Class" "${MEDIA_DIR}/headers.log"; then
-                    download_threads="6"
-                # 其余不确定的情况全部使用四线程下载
-                else
-                    download_threads="4"
-                fi
-                rm -f "${MEDIA_DIR}/headers.log"
-            else
-                if [ -f "${CONFIG_DIR}/ali2115.txt" ]; then
-                    download_threads="2"
-                else
-                    download_threads="6"
-                fi
+            metadata_download_log "${log_file}" "Attempt ${attempt} failed, retry in 60 seconds"
+            WARN "${file} 下载失败，60 秒后重试 (${attempt}/${METADATA_DOWNLOAD_MAX_RETRIES})...（日志：${log_file}）"
+            sleep 60 || metadata_download_cancel
+            if [ ! -f "${MEDIA_DIR}/temp/${file}" ] && [ -f "${MEDIA_DIR}/temp/${file}.aria2" ]; then
+                rm -f "${MEDIA_DIR}/temp/${file}.aria2"
             fi
-            if [ "${download_threads}" == "1" ]; then
-                INFO "单线程下载"
-            else
-                INFO "多线程下载，线程数：${download_threads}"
-            fi
-            if pull_run_glue aria2c -o "${1}" --header="User-Agent: ${GLOBAL_UA}" --allow-overwrite=true --auto-file-renaming=false --enable-color=false --file-allocation=none -c "-x${download_threads}" "${xiaoya_addr}/d/元数据/${1}$(get_sign "${CONFIG_DIR}")"; then
-                if [ -f "${MEDIA_DIR}/temp/${1}.aria2" ]; then
-                    ERROR "存在 ${MEDIA_DIR}/temp/${1}.aria2 文件，下载不完整！"
-                    exit 1
-                else
-                    INFO "${1} 下载成功！"
-                fi
-            else
-                DEBUG "${OSNAME} $(uname -a)"
-                ERROR "${1} 下载失败！"
-                exit 1
-            fi
-        fi
+            attempt=$((attempt + 1))
+        done
 
     }
 
@@ -3413,6 +3575,56 @@ function emby_fix_strmassistant() {
         return 1
     }
 
+    function emby_install_strmassistant_dll() {
+
+        local config_dir="$1"
+        local cid
+
+        pull_glue_python_ddsrem
+        mkdir -p "${config_dir}/plugins"
+        cid=$(docker create ddsderek/xiaoya-glue:python)
+        if ! docker cp "${cid}:/strmassistanthelper/StrmAssistant.dll" "${config_dir}/plugins/StrmAssistant.dll"; then
+            docker rm "${cid}" > /dev/null 2>&1
+            ERROR "复制 StrmAssistant.dll 失败"
+            return 1
+        fi
+        docker rm "${cid}" > /dev/null 2>&1
+        chmod 777 "${config_dir}/plugins/StrmAssistant.dll"
+        auto_chown "${config_dir}/plugins/StrmAssistant.dll"
+        INFO "Emby神医助手 插件已安装：${config_dir}/plugins/StrmAssistant.dll"
+        return 0
+
+    }
+
+    function emby_run_strmassistant_helper() {
+
+        local config_dir="$1"
+        local strm_helper_py strm_helper_mount=() rc
+
+        strm_helper_py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/glue_python/strmassistanthelper/strmassistanthelper.py"
+        if [ -f "${strm_helper_py}" ]; then
+            strm_helper_mount=(-v "${strm_helper_py}:/strmassistanthelper/strmassistanthelper.py:ro")
+        fi
+
+        clear_qrcode_container
+        pull_glue_python_ddsrem
+        # shellcheck disable=SC2046
+        docker run -it --rm \
+            -v "${config_dir}:/media/config" \
+            -e LANG=C.UTF-8 \
+            "${strm_helper_mount[@]}" \
+            $(auto_privileged) \
+            ddsderek/xiaoya-glue:python \
+            python3 /strmassistanthelper/strmassistanthelper.py
+        rc=$?
+        if [ "${rc}" -ne 0 ]; then
+            WARN "神医助手安装脚本退出码：${rc}"
+            return 1
+        fi
+        return 0
+
+    }
+
     if [ "${DOCKER_ARCH}" == "linux/amd64" ] || [ "${DOCKER_ARCH}" == "linux/arm64/v8" ]; then
         if [ "${DOCKER_ARCH}" == "linux/amd64" ]; then
             INFO "当前系统架构支持 Emby神医助手"
@@ -3428,15 +3640,12 @@ function emby_fix_strmassistant() {
         read -erp "请选择:" install_strmassistant
         [[ -z "${install_strmassistant}" ]] && install_strmassistant="Y"
         if [[ ${install_strmassistant} == [Yy] ]]; then
-            clear_qrcode_container
-            pull_glue_python_ddsrem
-            # shellcheck disable=SC2046
-            docker run -it --rm \
-                -v "${1}:/media/config" \
-                -e LANG=C.UTF-8 \
-                $(auto_privileged) \
-                ddsderek/xiaoya-glue:python \
-                /strmassistanthelper/strmassistanthelper.py
+            if ! emby_run_strmassistant_helper "${1}"; then
+                if ! emby_test_exist_strmassistant "${1}"; then
+                    WARN "尝试直接复制 StrmAssistant.dll ..."
+                    emby_install_strmassistant_dll "${1}" || return 1
+                fi
+            fi
         else
             if emby_test_exist_strmassistant "${1}"; then
                 INFO "跳过 Emby神医助手 安装/更新"
